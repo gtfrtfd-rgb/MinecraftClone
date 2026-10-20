@@ -15,6 +15,7 @@ Chunk::~Chunk() {
 }
 
 void Chunk::GenerateData() {
+    // Блокировку тут можно не ставить, так как чанк только создан и другие потоки его не читают
     for (int x = 0; x < CHUNK_SIZE; x++) {
         for (int z = 0; z < CHUNK_SIZE; z++) {
             int worldX = cx * CHUNK_SIZE + x;
@@ -45,11 +46,18 @@ BlockType Chunk::GetBlock(int x, int y, int z) const {
 }
 
 void Chunk::SetBlock(int x, int y, int z, BlockType type) {
+    std::lock_guard<std::mutex> lock(chunkMutex); // Блокируем данные
+
     if (x < 0 || x >= CHUNK_SIZE || y < 0 || y >= CHUNK_HEIGHT || z < 0 || z >= CHUNK_SIZE)
         return;
     blocks[x][y][z] = type;
-    // Если блок сломали, нужно перестроить меш
-    state = ChunkState::Generated; 
+    needsRemesh = true;
+
+    // Если чанк уже был отрисован, ставим его в очередь на пересборку
+    ChunkState s = state.load();
+    if (s == ChunkState::Loaded || s == ChunkState::MeshReady) {
+        state = ChunkState::Generated;
+    }
 }
 
 void Chunk::BuildMeshData() {
@@ -57,6 +65,9 @@ void Chunk::BuildMeshData() {
     pendingTexcoords.clear();
     pendingColors.clear();
     pendingIndices.clear();
+
+    // ⬇️ Блокируем данные на время чтения массива blocks ⬇️
+    std::lock_guard<std::mutex> lock(chunkMutex);
 
     unsigned short vertexIndex = 0;
     const int dx[6] = { 1, -1, 0, 0, 0, 0 };
@@ -81,7 +92,6 @@ void Chunk::BuildMeshData() {
                     if (nx >= 0 && nx < CHUNK_SIZE && ny >= 0 && ny < CHUNK_HEIGHT && nz >= 0 && nz < CHUNK_SIZE) {
                         neighborSolid = (blocks[nx][ny][nz] != BlockType::Air);
                     } else {
-                        // Внимание: вызов World::GetBlock из потока! Мы обезопасим его мьютексом в world.cpp
                         BlockType neighbor = World::GetBlock(cx * CHUNK_SIZE + nx, ny, cz * CHUNK_SIZE + nz);
                         neighborSolid = (neighbor != BlockType::Air);
                     }
@@ -190,9 +200,16 @@ void Chunk::BuildMeshData() {
             }
         }
     }
+
+    // Проверяем, не сломали ли блок, пока мы строили меш
+    if (needsRemesh) {
+        needsRemesh = false;
+        state = ChunkState::Generated; // Отправляем на пересборку
+    } else {
+        state = ChunkState::MeshReady;
+    }
 }
 
-// ЭТОТ МЕТОД ВЫЗЫВАЕТСЯ ТОЛЬКО В ГЛАВНОМ ПОТОКЕ
 void Chunk::UploadToGPU() {
     UnloadMesh();
 
@@ -205,7 +222,6 @@ void Chunk::UploadToGPU() {
     mesh.vertexCount = static_cast<int>(pendingVertices.size() / 3);
     mesh.triangleCount = static_cast<int>(pendingIndices.size() / 3);
     
-    // Выделяем память видеокарты и копируем данные
     mesh.vertices = (float*)MemAlloc(pendingVertices.size() * sizeof(float));
     mesh.texcoords = (float*)MemAlloc(pendingTexcoords.size() * sizeof(float));
     mesh.colors = (unsigned char*)MemAlloc(pendingColors.size() * sizeof(unsigned char));

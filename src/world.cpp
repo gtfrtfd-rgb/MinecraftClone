@@ -19,6 +19,13 @@ void World::Init() {
     chunks.clear();
 }
 
+std::shared_ptr<Chunk> World::GetChunk(int cx, int cz) {
+    std::shared_lock lock(chunksMutex);
+    auto it = chunks.find(Hash(cx, cz));
+    if (it != chunks.end()) return it->second;
+    return nullptr;
+}
+
 std::shared_ptr<Chunk> World::GetOrCreateChunk(int cx, int cz) {
     long long key = Hash(cx, cz);
     {
@@ -53,11 +60,26 @@ void World::Update(Vector3 playerPos) {
                     chunk->state = ChunkState::Generated; 
                 });
             } else if (s == ChunkState::Generated) {
-                chunk->state = ChunkState::Meshing;
-                pool.enqueue([chunk]() { 
-                    chunk->BuildMeshData(); 
-                    chunk->state = ChunkState::MeshReady; 
-                });
+                // ⬇️ Баг 2: Ждем генерации соседей перед постройкой меша ⬇️
+                bool neighborsReady = true;
+                for (int ndx = -1; ndx <= 1; ++ndx) {
+                    for (int ndz = -1; ndz <= 1; ++ndz) {
+                        if (ndx == 0 && ndz == 0) continue;
+                        auto neighbor = GetChunk(pcx + dx + ndx, pcz + dz + ndz);
+                        if (!neighbor || neighbor->state == ChunkState::Empty || neighbor->state == ChunkState::Generating) {
+                            neighborsReady = false;
+                            break;
+                        }
+                    }
+                    if (!neighborsReady) break;
+                }
+
+                if (neighborsReady) {
+                    chunk->state = ChunkState::Meshing;
+                    pool.enqueue([chunk]() { 
+                        chunk->BuildMeshData(); 
+                    });
+                }
             }
         }
     }
@@ -76,16 +98,10 @@ void World::Update(Vector3 playerPos) {
 
 void World::Draw(Camera3D camera) {
     std::shared_lock lock(chunksMutex);
-    
-    // Вычисляем вектор направления взгляда камеры
     Vector3 camForward = Vector3Normalize(Vector3Subtract(camera.target, camera.position));
-    
-    // Радиус сферы, описывающей весь чанк (половина диагонали 8x64x8)
-    // sqrt(4^2 + 32^2 + 4^2) ≈ 32.5
     const float chunkRadius = 32.5f;
 
     for (auto& [key, chunk] : chunks) {
-        // Центр текущего чанка
         Vector3 chunkCenter = { 
             chunk->GetCX() * CHUNK_SIZE + CHUNK_SIZE * 0.5f, 
             CHUNK_HEIGHT * 0.5f, 
@@ -95,11 +111,7 @@ void World::Draw(Camera3D camera) {
         Vector3 dirToChunk = Vector3Subtract(chunkCenter, camera.position);
         float dot = Vector3DotProduct(camForward, dirToChunk);
         
-        // Если скалярное произведение отрицательное и по модулю больше радиуса, 
-        // значит чанк полностью находится за спиной игрока — пропускаем отрисовку.
-        if (dot < -chunkRadius) {
-            continue; 
-        }
+        if (dot < -chunkRadius) continue; 
 
         chunk->Draw();
     }
@@ -173,7 +185,11 @@ void World::UnloadDistantChunks(Vector3 playerPos) {
         int dx = chunk->GetCX() - pcx;
         int dz = chunk->GetCZ() - pcz;
         if (std::abs(dx) > RENDER_DISTANCE + 2 || std::abs(dz) > RENDER_DISTANCE + 2) {
-            toRemove.push_back(key);
+            // ⬇️ Баг 3: Не удаляем чанки, которые сейчас в работе ⬇️
+            ChunkState s = chunk->state.load();
+            if (s != ChunkState::Generating && s != ChunkState::Meshing) {
+                toRemove.push_back(key);
+            }
         }
     }
     for (long long key : toRemove) {

@@ -9,7 +9,7 @@ class World {
 public:
     static void Init();
     static void Update(Vector3 playerPos);
-    static void Draw(Camera3D camera); // ⬅️ Теперь принимает камеру
+    static void Draw(Camera3D camera);
 
     static BlockType GetBlock(int x, int y, int z);
     static void SetBlock(int x, int y, int z, BlockType type);
@@ -20,5 +20,6 @@ private:
     static std::shared_mutex chunksMutex;
     static long long Hash(int cx, int cz);
     static std::shared_ptr<Chunk> GetOrCreateChunk(int cx, int cz);
+    static std::shared_ptr<Chunk> GetChunk(int cx, int cz); // ⬅️ Новый метод
     static void UnloadDistantChunks(Vector3 playerPos);
 };

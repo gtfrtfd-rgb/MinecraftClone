@@ -11,9 +11,12 @@
 int main() {
     SetTraceLogLevel(LOG_WARNING); 
 
-    // ⬇️ УБРАН FLAG_MSAA_4X_HINT ⬇️
-    SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+    // ⬇️ ВОЗВРАЩАЕМ FLAG_VSYNC_HINT ⬇️
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Minecraft Clone - raylib");
+    
+    // Ставим 0, чтобы частотой кадров управлял V-Sync, а не таймер raylib
+    SetTargetFPS(0); 
     DisableCursor();
 
     TextureAtlas::Init();
@@ -25,10 +28,7 @@ int main() {
     Player player;
     player.SetPosition({0.5f, 60.0f, 0.5f});
 
-    const double targetFrameTime = 1.0 / 240.0;
-
     while (!WindowShouldClose()) {
-        double frameStartTime = GetTime();
         float dt = GetFrameTime();
 
         World::Update(player.GetPosition());
@@ -89,12 +89,6 @@ int main() {
         }
 
         EndDrawing();
-
-        double frameTime = GetTime() - frameStartTime;
-        double timeLeft = targetFrameTime - frameTime;
-        if (timeLeft > 0) {
-            WaitTime(timeLeft);
-        }
     }
 
     TextureAtlas::Unload();

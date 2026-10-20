@@ -5,14 +5,15 @@
 #include <vector>
 #include <atomic>
 #include <memory>
+#include <mutex>
 
 enum class ChunkState {
-    Empty,       // Только создан
-    Generating,  // Поток генерирует блоки
-    Generated,   // Блоки готовы, нужен меш
-    Meshing,     // Поток строит меш
-    MeshReady,   // Меш готов, ждет отправки на GPU
-    Loaded       // Меш на GPU, чанк отрисовывается
+    Empty,       
+    Generating,  
+    Generated,   
+    Meshing,     
+    MeshReady,   
+    Loaded       
 };
 
 class Chunk {
@@ -20,9 +21,9 @@ public:
     Chunk(int cx, int cz);
     ~Chunk();
 
-    void GenerateData();  // Вызывается в фоновом потоке
-    void BuildMeshData(); // Вызывается в фоновом потоке
-    void UploadToGPU();   // Вызывается ТОЛЬКО в главном потоке
+    void GenerateData();  
+    void BuildMeshData(); 
+    void UploadToGPU();   
     void Draw() const;
 
     BlockType GetBlock(int x, int y, int z) const;
@@ -30,7 +31,6 @@ public:
 
     std::atomic<ChunkState> state;
     
-    // Буферы для передачи данных из потока в главный поток
     std::vector<float> pendingVertices;
     std::vector<float> pendingTexcoords;
     std::vector<unsigned char> pendingColors;
@@ -45,6 +45,9 @@ private:
     Mesh mesh = {0};
     Model model = {0};
     bool meshBuilt = false;
+
+    std::mutex chunkMutex; // Защита от одновременного чтения/записи
+    std::atomic<bool> needsRemesh{false}; // Флаг: блок сломали во время генерации
 
     void UnloadMesh();
 };
