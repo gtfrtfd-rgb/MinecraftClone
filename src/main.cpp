@@ -5,17 +5,18 @@
 #include "world.h"
 #include "player.h"
 #include "ui.h"
+#include "texture_atlas.h"
 #include <cmath>
 
 int main() {
-    // Убираем спам в консоль, оставляем только важные предупреждения и ошибки
     SetTraceLogLevel(LOG_WARNING); 
 
-    SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT | FLAG_VSYNC_HINT);
+    // ⬇️ УБРАН FLAG_MSAA_4X_HINT ⬇️
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Minecraft Clone - raylib");
-    SetTargetFPS(TARGET_FPS);
     DisableCursor();
 
+    TextureAtlas::Init();
     BlockRegistry::Init();
     World::Init();
 
@@ -24,7 +25,10 @@ int main() {
     Player player;
     player.SetPosition({0.5f, 60.0f, 0.5f});
 
+    const double targetFrameTime = 1.0 / 240.0;
+
     while (!WindowShouldClose()) {
+        double frameStartTime = GetTime();
         float dt = GetFrameTime();
 
         World::Update(player.GetPosition());
@@ -67,8 +71,7 @@ int main() {
         ClearBackground(SKYBLUE);
 
         BeginMode3D(player.GetCamera());
-        World::Draw();
-
+        World::Draw(player.GetCamera());
         if (hit) {
             UI::DrawBlockHighlight(hitBlock);
         }
@@ -86,8 +89,15 @@ int main() {
         }
 
         EndDrawing();
+
+        double frameTime = GetTime() - frameStartTime;
+        double timeLeft = targetFrameTime - frameTime;
+        if (timeLeft > 0) {
+            WaitTime(timeLeft);
+        }
     }
 
+    TextureAtlas::Unload();
     CloseWindow();
     return 0;
 }

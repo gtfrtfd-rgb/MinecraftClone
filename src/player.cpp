@@ -41,20 +41,20 @@ void Player::HandleMouseLook() {
 }
 
 void Player::HandleMovement(float deltaTime) {
-    Vector3 forward = {
-        cosf(DEG2RAD * yaw) * cosf(DEG2RAD * pitch),
-        sinf(DEG2RAD * pitch),
-        sinf(DEG2RAD * yaw) * cosf(DEG2RAD * pitch)
-    };
+    // ⬇️ ИСПРАВЛЕНИЕ: Движение строго по горизонтали ⬇️
+    // Игнорируем pitch, чтобы скорость не падала при взгляде вниз/вверх
+    Vector3 forward = { cosf(DEG2RAD * yaw), 0.0f, sinf(DEG2RAD * yaw) };
     forward = Vector3Normalize(forward);
 
-    Vector3 right = Vector3Normalize(Vector3CrossProduct(forward, {0, 1, 0}));
+    // Вектор вправо (перпендикулярен forward)
+    Vector3 right = { -forward.z, 0.0f, forward.x };
 
     Vector3 move = {0, 0, 0};
-    if (IsKeyDown(KEY_W)) move = Vector3Add(move, forward);
-    if (IsKeyDown(KEY_S)) move = Vector3Subtract(move, forward);
-    if (IsKeyDown(KEY_D)) move = Vector3Add(move, right);
-    if (IsKeyDown(KEY_A)) move = Vector3Subtract(move, right);
+    
+    if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP))    move = Vector3Add(move, forward);
+    if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN))  move = Vector3Subtract(move, forward);
+    if (IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT)) move = Vector3Add(move, right);
+    if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT))  move = Vector3Subtract(move, right);
 
     if (Vector3Length(move) > 0.001f) {
         move = Vector3Normalize(move);
@@ -80,7 +80,6 @@ void Player::ApplyPhysics(float deltaTime) {
         int minX = static_cast<int>(std::floor(p.x - PLAYER_RADIUS));
         int maxX = static_cast<int>(std::floor(p.x + PLAYER_RADIUS));
         int minY = static_cast<int>(std::floor(p.y));
-        // Важное исправление: вычитаем 0.01f, чтобы хитбокс не был выше, чем нужно
         int maxY = static_cast<int>(std::floor(p.y + PLAYER_HEIGHT - 0.01f));
         int minZ = static_cast<int>(std::floor(p.z - PLAYER_RADIUS));
         int maxZ = static_cast<int>(std::floor(p.z + PLAYER_RADIUS));
@@ -111,6 +110,7 @@ void Player::ApplyPhysics(float deltaTime) {
 }
 
 void Player::UpdateCamera() {
+    // Камера смотрит с учетом pitch (включая наклон вверх/вниз)
     Vector3 forward = {
         cosf(DEG2RAD * yaw) * cosf(DEG2RAD * pitch),
         sinf(DEG2RAD * pitch),

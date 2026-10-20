@@ -4,7 +4,6 @@ project(MinecraftClone LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Автоматическая загрузка raylib
 include(FetchContent)
 FetchContent_Declare(
     raylib
@@ -13,10 +12,17 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(raylib)
 
-# Сбор всех .cpp файлов из папки src
-file(GLOB SOURCES "src/*.cpp")
-
-add_executable(MinecraftClone ${SOURCES})
+add_executable(MinecraftClone 
+    src/main.cpp
+    src/block.cpp
+    src/chunk.cpp
+    src/world.cpp
+    src/player.cpp
+    src/utils.cpp
+    src/ui.cpp
+    src/texture_atlas.cpp
+    src/thread_pool.cpp
+)
 
 target_include_directories(MinecraftClone PRIVATE src)
 target_link_libraries(MinecraftClone PRIVATE raylib)

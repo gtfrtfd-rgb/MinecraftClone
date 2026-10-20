@@ -8,7 +8,8 @@ namespace UI {
 void Draw() {
     DrawFPS(10, 10);
     DrawText("Minecraft Clone (raylib)", 10, 40, 20, RAYWHITE);
-    DrawText("WASD - Move | Mouse - Look | Space - Jump", 10, 70, 16, LIGHTGRAY);
+    // ⬇️ Обновили подсказку ⬇️
+    DrawText("WASD / Arrows - Move | Mouse - Look | Space - Jump", 10, 70, 16, LIGHTGRAY);
     DrawText("LMB - Break | RMB - Place", 10, 90, 16, LIGHTGRAY);
 }
 

@@ -2,7 +2,7 @@
 
 constexpr int SCREEN_WIDTH = 1280;
 constexpr int SCREEN_HEIGHT = 720;
-constexpr int TARGET_FPS = 0; // VSync
+constexpr int TARGET_FPS = 240; // Установлен лимит 240 FPS
 
 constexpr float PLAYER_MOVE_SPEED = 6.0f;
 constexpr float PLAYER_MOUSE_SENSITIVITY = 0.003f;
@@ -11,10 +11,8 @@ constexpr float PLAYER_JUMP_FORCE = 9.0f;
 constexpr float PLAYER_HEIGHT = 1.8f;
 constexpr float PLAYER_RADIUS = 0.3f;
 
-// Уменьшили размер чанка, чтобы избежать переполнения индексов
-constexpr int CHUNK_SIZE = 4; 
+constexpr int CHUNK_SIZE = 8; 
 constexpr int CHUNK_HEIGHT = 64;
-// Увеличили дистанцию, так как чанки стали меньше
 constexpr int RENDER_DISTANCE = 12; 
 
 constexpr float TERRAIN_BASE_HEIGHT = 20.0f;

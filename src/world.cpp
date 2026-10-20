@@ -1,31 +1,40 @@
 #include "world.h"
 #include "config.h"
 #include "raymath.h"
+#include "thread_pool.h"
 #include <cmath>
 #include <algorithm>
 #include <vector>
 
-std::unordered_map<long long, std::unique_ptr<Chunk>> World::chunks;
+std::unordered_map<long long, std::shared_ptr<Chunk>> World::chunks;
+std::shared_mutex World::chunksMutex;
+static ThreadPool pool(std::thread::hardware_concurrency() > 1 ? std::thread::hardware_concurrency() - 1 : 1);
 
 long long World::Hash(int cx, int cz) {
     return (static_cast<long long>(cx) << 32) | static_cast<unsigned int>(cz);
 }
 
 void World::Init() {
+    std::unique_lock lock(chunksMutex);
     chunks.clear();
 }
 
-Chunk* World::GetOrCreateChunk(int cx, int cz) {
+std::shared_ptr<Chunk> World::GetOrCreateChunk(int cx, int cz) {
     long long key = Hash(cx, cz);
+    {
+        std::shared_lock lock(chunksMutex);
+        auto it = chunks.find(key);
+        if (it != chunks.end()) return it->second;
+    }
+    
+    std::unique_lock lock(chunksMutex);
     auto it = chunks.find(key);
     if (it == chunks.end()) {
-        auto chunk = std::make_unique<Chunk>(cx, cz);
-        chunk->Generate();
-        Chunk* ptr = chunk.get();
-        chunks[key] = std::move(chunk);
-        return ptr;
+        auto chunk = std::make_shared<Chunk>(cx, cz);
+        chunks[key] = chunk;
+        return chunk;
     }
-    return it->second.get();
+    return it->second;
 }
 
 void World::Update(Vector3 playerPos) {
@@ -34,21 +43,64 @@ void World::Update(Vector3 playerPos) {
 
     for (int dx = -RENDER_DISTANCE; dx <= RENDER_DISTANCE; dx++) {
         for (int dz = -RENDER_DISTANCE; dz <= RENDER_DISTANCE; dz++) {
-            GetOrCreateChunk(pcx + dx, pcz + dz);
+            auto chunk = GetOrCreateChunk(pcx + dx, pcz + dz);
+            
+            ChunkState s = chunk->state.load();
+            if (s == ChunkState::Empty) {
+                chunk->state = ChunkState::Generating;
+                pool.enqueue([chunk]() { 
+                    chunk->GenerateData(); 
+                    chunk->state = ChunkState::Generated; 
+                });
+            } else if (s == ChunkState::Generated) {
+                chunk->state = ChunkState::Meshing;
+                pool.enqueue([chunk]() { 
+                    chunk->BuildMeshData(); 
+                    chunk->state = ChunkState::MeshReady; 
+                });
+            }
         }
     }
 
-    for (auto& [key, chunk] : chunks) {
-        if (chunk->IsDirty()) {
-            chunk->BuildMesh();
+    {
+        std::shared_lock lock(chunksMutex);
+        for (auto& [key, chunk] : chunks) {
+            if (chunk->state.load() == ChunkState::MeshReady) {
+                chunk->UploadToGPU();
+            }
         }
     }
 
     UnloadDistantChunks(playerPos);
 }
 
-void World::Draw() {
+void World::Draw(Camera3D camera) {
+    std::shared_lock lock(chunksMutex);
+    
+    // Вычисляем вектор направления взгляда камеры
+    Vector3 camForward = Vector3Normalize(Vector3Subtract(camera.target, camera.position));
+    
+    // Радиус сферы, описывающей весь чанк (половина диагонали 8x64x8)
+    // sqrt(4^2 + 32^2 + 4^2) ≈ 32.5
+    const float chunkRadius = 32.5f;
+
     for (auto& [key, chunk] : chunks) {
+        // Центр текущего чанка
+        Vector3 chunkCenter = { 
+            chunk->GetCX() * CHUNK_SIZE + CHUNK_SIZE * 0.5f, 
+            CHUNK_HEIGHT * 0.5f, 
+            chunk->GetCZ() * CHUNK_SIZE + CHUNK_SIZE * 0.5f 
+        };
+        
+        Vector3 dirToChunk = Vector3Subtract(chunkCenter, camera.position);
+        float dot = Vector3DotProduct(camForward, dirToChunk);
+        
+        // Если скалярное произведение отрицательное и по модулю больше радиуса, 
+        // значит чанк полностью находится за спиной игрока — пропускаем отрисовку.
+        if (dot < -chunkRadius) {
+            continue; 
+        }
+
         chunk->Draw();
     }
 }
@@ -62,19 +114,12 @@ BlockType World::GetBlock(int x, int y, int z) {
     int lz = z - cz * CHUNK_SIZE;
 
     long long key = Hash(cx, cz);
+    
+    std::shared_lock lock(chunksMutex); 
     auto it = chunks.find(key);
     if (it == chunks.end()) return BlockType::Air;
 
     return it->second->GetBlock(lx, y, lz);
-}
-
-int World::GetHighestBlock(int x, int z) {
-    for (int y = CHUNK_HEIGHT - 1; y >= 0; y--) {
-        if (GetBlock(x, y, z) != BlockType::Air) {
-            return y;
-        }
-    }
-    return 0;
 }
 
 void World::SetBlock(int x, int y, int z, BlockType type) {
@@ -85,13 +130,13 @@ void World::SetBlock(int x, int y, int z, BlockType type) {
     int lx = x - cx * CHUNK_SIZE;
     int lz = z - cz * CHUNK_SIZE;
 
-    Chunk* chunk = GetOrCreateChunk(cx, cz);
+    auto chunk = GetOrCreateChunk(cx, cz);
     chunk->SetBlock(lx, y, lz, type);
 
-    if (lx == 0)              { auto* c = GetOrCreateChunk(cx-1, cz); c->MarkDirty(); }
-    if (lx == CHUNK_SIZE - 1) { auto* c = GetOrCreateChunk(cx+1, cz); c->MarkDirty(); }
-    if (lz == 0)              { auto* c = GetOrCreateChunk(cx, cz-1); c->MarkDirty(); }
-    if (lz == CHUNK_SIZE - 1) { auto* c = GetOrCreateChunk(cx, cz+1); c->MarkDirty(); }
+    if (lx == 0)              { auto c = GetOrCreateChunk(cx-1, cz); c->state = ChunkState::Generated; }
+    if (lx == CHUNK_SIZE - 1) { auto c = GetOrCreateChunk(cx+1, cz); c->state = ChunkState::Generated; }
+    if (lz == 0)              { auto c = GetOrCreateChunk(cx, cz-1); c->state = ChunkState::Generated; }
+    if (lz == CHUNK_SIZE - 1) { auto c = GetOrCreateChunk(cx, cz+1); c->state = ChunkState::Generated; }
 }
 
 Vector3 World::Raycast(Vector3 origin, Vector3 direction, float maxDistance, bool& hit, Vector3& hitNormal) {
@@ -122,6 +167,7 @@ void World::UnloadDistantChunks(Vector3 playerPos) {
     int pcx = static_cast<int>(std::floor(playerPos.x / CHUNK_SIZE));
     int pcz = static_cast<int>(std::floor(playerPos.z / CHUNK_SIZE));
 
+    std::unique_lock lock(chunksMutex);
     std::vector<long long> toRemove;
     for (auto& [key, chunk] : chunks) {
         int dx = chunk->GetCX() - pcx;

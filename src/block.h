@@ -15,9 +15,10 @@ enum class BlockType : unsigned char {
 
 struct BlockInfo {
     const char* name;
-    Color color;
     bool isSolid;
-    Rectangle textureCoords; // UV-координаты в атласе
+    int texTop;
+    int texSide;
+    int texBottom;
 };
 
 class BlockRegistry {
