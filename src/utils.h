@@ -6,4 +6,7 @@ namespace Utils {
     float Noise2D(float x, float y);
     float Fract(float v);
     float Lerp(float a, float b, float t);
+    
+    // Детерминированный хеш для деревьев
+    unsigned int TreeHash(int x, int z); 
 }

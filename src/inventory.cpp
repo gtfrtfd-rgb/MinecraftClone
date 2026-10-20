@@ -3,7 +3,6 @@
 #include "block.h"
 
 Inventory::Inventory() : selectedSlot(0) {
-    // Заполняем слоты доступными блоками
     slots = {
         BlockType::Grass,
         BlockType::Dirt,
@@ -12,14 +11,12 @@ Inventory::Inventory() : selectedSlot(0) {
         BlockType::Wood,
         BlockType::Leaves
     };
-    // Добавляем пустые слоты до 9 штук
     while (slots.size() < 9) {
         slots.push_back(BlockType::Air);
     }
 }
 
 void Inventory::Update() {
-    // Переключение цифрами 1-9
     if (IsKeyPressed(KEY_ONE)) selectedSlot = 0;
     if (IsKeyPressed(KEY_TWO)) selectedSlot = 1;
     if (IsKeyPressed(KEY_THREE)) selectedSlot = 2;
@@ -30,7 +27,6 @@ void Inventory::Update() {
     if (IsKeyPressed(KEY_EIGHT)) selectedSlot = 7;
     if (IsKeyPressed(KEY_NINE)) selectedSlot = 8;
 
-    // Переключение колесиком мыши
     float wheel = GetMouseWheelMove();
     if (wheel != 0) {
         selectedSlot -= (int)wheel;
@@ -49,23 +45,18 @@ void Inventory::Draw(int screenWidth, int screenHeight) {
 
     for (int i = 0; i < 9; i++) {
         int x = startX + i * (slotSize + padding);
-        
-        // Фон слота
         DrawRectangle(x, startY, slotSize, slotSize, Fade(GRAY, 0.6f));
         
-        // Рамка (белая, если выбран)
         if (i == selectedSlot) {
             DrawRectangleLines(x - 2, startY - 2, slotSize + 4, slotSize + 4, WHITE);
         } else {
             DrawRectangleLines(x, startY, slotSize, slotSize, DARKGRAY);
         }
 
-        // Отрисовка иконки блока
         if (slots[i] != BlockType::Air) {
-            int texIndex = BlockRegistry::Get(slots[i]).texTop;
-            Rectangle uv = TextureAtlas::GetUV(texIndex);
+            // Используем texSide для иконки (у дерева будет кора)
+            int texIndex = BlockRegistry::Get(slots[i]).texSide;
             
-            // Переводим UV в пиксели (атлас 512x512, тайл 32x32)
             int tx = texIndex % 16;
             int ty = texIndex / 16;
             Rectangle src = { (float)(tx * 32), (float)(ty * 32), 32.0f, 32.0f };
@@ -74,7 +65,6 @@ void Inventory::Draw(int screenWidth, int screenHeight) {
             DrawTexturePro(atlas, src, dest, {0, 0}, 0.0f, WHITE);
         }
         
-        // Цифра слота (для удобства)
         DrawText(TextFormat("%d", i + 1), x + 4, startY + slotSize - 16, 10, LIGHTGRAY);
     }
 }

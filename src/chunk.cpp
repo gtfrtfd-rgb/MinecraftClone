@@ -15,7 +15,7 @@ Chunk::~Chunk() {
 }
 
 void Chunk::GenerateData() {
-    // Блокировку тут можно не ставить, так как чанк только создан и другие потоки его не читают
+    // 1. Генерация ландшафта
     for (int x = 0; x < CHUNK_SIZE; x++) {
         for (int z = 0; z < CHUNK_SIZE; z++) {
             int worldX = cx * CHUNK_SIZE + x;
@@ -37,6 +37,62 @@ void Chunk::GenerateData() {
             }
         }
     }
+
+    // 2. Генерация деревьев
+    for (int x = 0; x < CHUNK_SIZE; x++) {
+        for (int z = 0; z < CHUNK_SIZE; z++) {
+            
+            // Отступаем от краев чанка
+            if (x < 2 || x >= CHUNK_SIZE - 2 || z < 2 || z >= CHUNK_SIZE - 2) {
+                continue; 
+            }
+
+            int worldX = cx * CHUNK_SIZE + x;
+            int worldZ = cz * CHUNK_SIZE + z;
+
+            int height = CHUNK_HEIGHT - 1;
+            while (height > 0 && blocks[x][height][z] == BlockType::Air) {
+                height--;
+            }
+
+            // Лесной шум
+            float forestNoise = Utils::Noise2D(worldX * 0.01f, worldZ * 0.01f);
+            
+            // ⬇️ ИСПРАВЛЕНИЕ: Шанс 1 к 80 (было 30), чтобы деревья не сливались в стену ⬇️
+            if (forestNoise > 0.1f && blocks[x][height][z] == BlockType::Grass && (Utils::TreeHash(worldX, worldZ) % 80) == 0) {
+                
+                int trunkHeight = 4 + (Utils::TreeHash(worldX + 1, worldZ + 1) % 3); 
+                int topY = height + trunkHeight;
+
+                // Сажаем ствол
+                for (int ty = 1; ty <= trunkHeight; ty++) {
+                    if (height + ty < CHUNK_HEIGHT) {
+                        blocks[x][height + ty][z] = BlockType::Wood;
+                    }
+                }
+
+                // Строим крону 5x5
+                for (int ly = -2; ly <= 1; ly++) {
+                    int radius = (ly == 1) ? 1 : 2; 
+                    for (int lx = -radius; lx <= radius; lx++) {
+                        for (int lz = -radius; lz <= radius; lz++) {
+                            if (radius == 2 && abs(lx) == 2 && abs(lz) == 2) continue;
+                            int leafX = x + lx;
+                            int leafY = topY + ly;
+                            int leafZ = z + lz;
+                            if (leafY >= 0 && leafY < CHUNK_HEIGHT) {
+                                if (blocks[leafX][leafY][leafZ] == BlockType::Air) {
+                                    if (Utils::TreeHash(leafX, leafZ) % 10 != 0) {
+                                        blocks[leafX][leafY][leafZ] = BlockType::Leaves;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 BlockType Chunk::GetBlock(int x, int y, int z) const {
@@ -46,14 +102,13 @@ BlockType Chunk::GetBlock(int x, int y, int z) const {
 }
 
 void Chunk::SetBlock(int x, int y, int z, BlockType type) {
-    std::lock_guard<std::mutex> lock(chunkMutex); // Блокируем данные
+    std::lock_guard<std::mutex> lock(chunkMutex);
 
     if (x < 0 || x >= CHUNK_SIZE || y < 0 || y >= CHUNK_HEIGHT || z < 0 || z >= CHUNK_SIZE)
         return;
     blocks[x][y][z] = type;
     needsRemesh = true;
 
-    // Если чанк уже был отрисован, ставим его в очередь на пересборку
     ChunkState s = state.load();
     if (s == ChunkState::Loaded || s == ChunkState::MeshReady) {
         state = ChunkState::Generated;
@@ -66,7 +121,6 @@ void Chunk::BuildMeshData() {
     pendingColors.clear();
     pendingIndices.clear();
 
-    // ⬇️ Блокируем данные на время чтения массива blocks ⬇️
     std::lock_guard<std::mutex> lock(chunkMutex);
 
     unsigned short vertexIndex = 0;
@@ -201,10 +255,9 @@ void Chunk::BuildMeshData() {
         }
     }
 
-    // Проверяем, не сломали ли блок, пока мы строили меш
     if (needsRemesh) {
         needsRemesh = false;
-        state = ChunkState::Generated; // Отправляем на пересборку
+        state = ChunkState::Generated;
     } else {
         state = ChunkState::MeshReady;
     }
