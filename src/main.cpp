@@ -6,16 +6,14 @@
 #include "player.h"
 #include "ui.h"
 #include "texture_atlas.h"
+#include "inventory.h"
 #include <cmath>
 
 int main() {
     SetTraceLogLevel(LOG_WARNING); 
 
-    // ⬇️ ВОЗВРАЩАЕМ FLAG_VSYNC_HINT ⬇️
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Minecraft Clone - raylib");
-    
-    // Ставим 0, чтобы частотой кадров управлял V-Sync, а не таймер raylib
     SetTargetFPS(0); 
     DisableCursor();
 
@@ -27,12 +25,15 @@ int main() {
 
     Player player;
     player.SetPosition({0.5f, 60.0f, 0.5f});
+    
+    Inventory inventory; // ⬅️ Создаем инвентарь
 
     while (!WindowShouldClose()) {
         float dt = GetFrameTime();
 
         World::Update(player.GetPosition());
         player.Update(dt);
+        inventory.Update(); // ⬅️ Обновляем выбор слота
 
         Vector3 origin = player.GetCamera().position;
         Vector3 dir = player.GetForward();
@@ -62,7 +63,8 @@ int main() {
                                      pz <= static_cast<int>(floorf(playerPos.z + PLAYER_RADIUS)));
 
                 if (!insidePlayer) {
-                    World::SetBlock(px, py, pz, BlockType::Stone);
+                    // ⬇️ Ставим блок, выбранный в инвентаре ⬇️
+                    World::SetBlock(px, py, pz, inventory.GetSelectedBlock());
                 }
             }
         }
@@ -79,6 +81,7 @@ int main() {
 
         player.DrawCrosshair();
         UI::Draw();
+        inventory.Draw(GetScreenWidth(), GetScreenHeight()); // ⬅️ Рисуем хотбар
 
         if (hit) {
             DrawText(TextFormat("Looking at: %d, %d, %d",

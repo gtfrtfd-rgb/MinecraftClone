@@ -60,18 +60,23 @@ void World::Update(Vector3 playerPos) {
                     chunk->state = ChunkState::Generated; 
                 });
             } else if (s == ChunkState::Generated) {
-                // ⬇️ Баг 2: Ждем генерации соседей перед постройкой меша ⬇️
+                // ⬇️ ИСПРАВЛЕНИЕ: Если чанк на краю, не ждем соседей ⬇️
+                bool isEdge = (dx == -RENDER_DISTANCE || dx == RENDER_DISTANCE || 
+                               dz == -RENDER_DISTANCE || dz == RENDER_DISTANCE);
+                
                 bool neighborsReady = true;
-                for (int ndx = -1; ndx <= 1; ++ndx) {
-                    for (int ndz = -1; ndz <= 1; ++ndz) {
-                        if (ndx == 0 && ndz == 0) continue;
-                        auto neighbor = GetChunk(pcx + dx + ndx, pcz + dz + ndz);
-                        if (!neighbor || neighbor->state == ChunkState::Empty || neighbor->state == ChunkState::Generating) {
-                            neighborsReady = false;
-                            break;
+                if (!isEdge) {
+                    for (int ndx = -1; ndx <= 1; ++ndx) {
+                        for (int ndz = -1; ndz <= 1; ++ndz) {
+                            if (ndx == 0 && ndz == 0) continue;
+                            auto neighbor = GetChunk(pcx + dx + ndx, pcz + dz + ndz);
+                            if (!neighbor || neighbor->state == ChunkState::Empty || neighbor->state == ChunkState::Generating) {
+                                neighborsReady = false;
+                                break;
+                            }
                         }
+                        if (!neighborsReady) break;
                     }
-                    if (!neighborsReady) break;
                 }
 
                 if (neighborsReady) {
@@ -185,7 +190,6 @@ void World::UnloadDistantChunks(Vector3 playerPos) {
         int dx = chunk->GetCX() - pcx;
         int dz = chunk->GetCZ() - pcz;
         if (std::abs(dx) > RENDER_DISTANCE + 2 || std::abs(dz) > RENDER_DISTANCE + 2) {
-            // ⬇️ Баг 3: Не удаляем чанки, которые сейчас в работе ⬇️
             ChunkState s = chunk->state.load();
             if (s != ChunkState::Generating && s != ChunkState::Meshing) {
                 toRemove.push_back(key);

@@ -22,6 +22,7 @@ add_executable(MinecraftClone
     src/ui.cpp
     src/texture_atlas.cpp
     src/thread_pool.cpp
+    src/inventory.cpp
 )
 
 target_include_directories(MinecraftClone PRIVATE src)
