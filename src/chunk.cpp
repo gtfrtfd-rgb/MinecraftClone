@@ -55,13 +55,14 @@ void Chunk::GenerateData() {
                 height--;
             }
 
-            // Лесной шум
+            // Лесной шум (снизили частоту и шанс появления)
             float forestNoise = Utils::Noise2D(worldX * 0.01f, worldZ * 0.01f);
             
-            // ⬇️ ИСПРАВЛЕНИЕ: Шанс 1 к 80 (было 30), чтобы деревья не сливались в стену ⬇️
-            if (forestNoise > 0.1f && blocks[x][height][z] == BlockType::Grass && (Utils::TreeHash(worldX, worldZ) % 80) == 0) {
+            // ⬇️ Шанс 1 к 120, чтобы лес был просторным ⬇️
+            if (forestNoise > 0.1f && blocks[x][height][z] == BlockType::Grass && (Utils::TreeHash(worldX, worldZ) % 120) == 0) {
                 
-                int trunkHeight = 4 + (Utils::TreeHash(worldX + 1, worldZ + 1) % 3); 
+                // Ствол высотой 5-7 блоков
+                int trunkHeight = 5 + (Utils::TreeHash(worldX + 1, worldZ + 1) % 3); 
                 int topY = height + trunkHeight;
 
                 // Сажаем ствол
@@ -71,18 +72,23 @@ void Chunk::GenerateData() {
                     }
                 }
 
-                // Строим крону 5x5
-                for (int ly = -2; ly <= 1; ly++) {
-                    int radius = (ly == 1) ? 1 : 2; 
+                // Строим крону 5x5. Начинаем с ly = -1, чтобы листва налезала на ствол!
+                for (int ly = -1; ly <= 2; ly++) {
+                    int radius = (ly == 2) ? 1 : 2; 
                     for (int lx = -radius; lx <= radius; lx++) {
                         for (int lz = -radius; lz <= radius; lz++) {
+                            
+                            // Обрубаем углы у широких слоев
                             if (radius == 2 && abs(lx) == 2 && abs(lz) == 2) continue;
+                            
                             int leafX = x + lx;
                             int leafY = topY + ly;
                             int leafZ = z + lz;
+
                             if (leafY >= 0 && leafY < CHUNK_HEIGHT) {
                                 if (blocks[leafX][leafY][leafZ] == BlockType::Air) {
-                                    if (Utils::TreeHash(leafX, leafZ) % 10 != 0) {
+                                    // ⬇️ Исправлены дырки: используем leafY в хеше, чтобы дырки не были колоннами ⬇️
+                                    if (Utils::TreeHash(leafX + leafY * 17, leafZ + leafY * 23) % 15 != 0) {
                                         blocks[leafX][leafY][leafZ] = BlockType::Leaves;
                                     }
                                 }
@@ -157,7 +163,8 @@ void Chunk::BuildMeshData() {
                     if (f == 3) texIndex = info.texBottom; 
 
                     Rectangle uv = TextureAtlas::GetUV(texIndex);
-                    float inset = 0.005f; 
+                    // Увеличили отступ, чтобы черные полосы точно исчезли
+                    float inset = 0.01f; 
                     uv.x += inset; uv.y += inset;
                     uv.width -= inset * 2.0f; uv.height -= inset * 2.0f;
 
