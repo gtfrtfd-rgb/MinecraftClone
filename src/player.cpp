@@ -18,20 +18,14 @@ Player::Player() {
 }
 
 void Player::SetPosition(Vector3 pos) { position = pos; UpdateCamera(); }
-
-void Player::Update(float deltaTime) {
-    HandleMouseLook();
-    HandleMovement(deltaTime);
-    ApplyPhysics(deltaTime);
-    UpdateCamera();
-}
+void Player::Update(float deltaTime) { HandleMouseLook(); HandleMovement(deltaTime); ApplyPhysics(deltaTime); UpdateCamera(); }
 
 void Player::HandleMouseLook() {
     Vector2 mouseDelta = GetMouseDelta();
     yaw += mouseDelta.x * PLAYER_MOUSE_SENSITIVITY * 100.0f;
     
-    // ⬇️ Ограничиваем yaw по модулю 360 ⬇️
-    if (yaw >= 360.0f) yaw -= 360.0f;
+    // ⬇️ ФИКС: Используем fmodf для нормализации ⬇️
+    yaw = fmodf(yaw, 360.0f);
     if (yaw < 0.0f) yaw += 360.0f;
 
     pitch -= mouseDelta.y * PLAYER_MOUSE_SENSITIVITY * 100.0f;

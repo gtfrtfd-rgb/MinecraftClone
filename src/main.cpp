@@ -14,14 +14,13 @@ int main() {
 
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Minecraft Clone - raylib");
-    SetTargetFPS(TARGET_FPS); // ⬅️ Используем TARGET_FPS
+    SetTargetFPS(TARGET_FPS);
     DisableCursor();
 
     TextureAtlas::Init();
     BlockRegistry::Init();
     World::Init();
 
-    // ⬇️ Предварительная генерация чанков вокруг спавна (решение падения) ⬇️
     for (int dx = -1; dx <= 1; dx++) {
         for (int dz = -1; dz <= 1; dz++) {
             auto chunk = World::GetOrCreateChunk(dx, dz);
@@ -53,7 +52,6 @@ int main() {
                 World::SetBlock(static_cast<int>(hitBlock.x), static_cast<int>(hitBlock.y), static_cast<int>(hitBlock.z), BlockType::Air);
             }
             if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
-                // ⬇️ Проверка пустого слота (Баг 10) ⬇️
                 BlockType selectedBlock = inventory.GetSelectedBlock();
                 if (selectedBlock != BlockType::Air) {
                     Vector3 placePos = Vector3Add(hitBlock, hitNormal);
@@ -89,7 +87,6 @@ int main() {
         inventory.Draw(GetScreenWidth(), GetScreenHeight());
 
         if (hit) {
-            // ⬇️ Используем GetScreenHeight() вместо SCREEN_HEIGHT ⬇️
             DrawText(TextFormat("Looking at: %d, %d, %d",
                                 static_cast<int>(hitBlock.x), static_cast<int>(hitBlock.y), static_cast<int>(hitBlock.z)),
                      10, GetScreenHeight() - 30, 16, RAYWHITE);
@@ -98,6 +95,8 @@ int main() {
         EndDrawing();
     }
 
+    // ⬇️ КРИТИЧЕСКИЙ ФИКС: Очистка перед закрытием окна ⬇️
+    World::Shutdown();
     TextureAtlas::Unload();
     CloseWindow();
     return 0;

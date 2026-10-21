@@ -18,7 +18,7 @@ ThreadPool::ThreadPool(size_t threads) : stop(false) {
     }
 }
 
-ThreadPool::~ThreadPool() {
+void ThreadPool::Shutdown() {
     {
         std::unique_lock<std::mutex> lock(queue_mutex);
         stop = true;
@@ -27,4 +27,8 @@ ThreadPool::~ThreadPool() {
     for(std::thread &worker: workers) {
         if (worker.joinable()) worker.join();
     }
+}
+
+ThreadPool::~ThreadPool() {
+    Shutdown();
 }

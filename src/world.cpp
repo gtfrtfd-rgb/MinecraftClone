@@ -9,7 +9,7 @@
 std::unordered_map<long long, std::shared_ptr<Chunk>> World::chunks;
 std::vector<std::shared_ptr<Chunk>> World::chunksToDelete;
 std::shared_mutex World::chunksMutex;
-static ThreadPool pool(std::thread::hardware_concurrency() > 1 ? std::thread::hardware_concurrency() - 1 : 1);
+static std::unique_ptr<ThreadPool> pool; // ⬅️ Умный указатель для управления жизнью
 
 long long World::Hash(int cx, int cz) {
     unsigned long long ucx = static_cast<unsigned int>(cx);
@@ -20,6 +20,17 @@ long long World::Hash(int cx, int cz) {
 void World::Init() {
     std::unique_lock lock(chunksMutex);
     chunks.clear();
+    chunksToDelete.clear();
+    pool = std::make_unique<ThreadPool>(std::thread::hardware_concurrency() > 1 ? std::thread::hardware_concurrency() - 1 : 1);
+}
+
+void World::Shutdown() {
+    if (pool) {
+        pool->Shutdown(); // Останавливаем потоки
+        pool.reset();
+    }
+    std::unique_lock lock(chunksMutex);
+    chunks.clear(); // Деструкторы вызываются здесь, в главном потоке
     chunksToDelete.clear();
 }
 
@@ -51,17 +62,25 @@ void World::Update(Vector3 playerPos) {
     int pcx = static_cast<int>(std::floor(playerPos.x / CHUNK_SIZE));
     int pcz = static_cast<int>(std::floor(playerPos.z / CHUNK_SIZE));
 
-    for (int dx = -RENDER_DISTANCE; dx <= RENDER_DISTANCE; dx++) {
-        for (int dz = -RENDER_DISTANCE; dz <= RENDER_DISTANCE; dz++) {
+    // ⬇️ Генерируем чанки с запасом (+1), чтобы соседи краевых чанков существовали ⬇️
+    for (int dx = -RENDER_DISTANCE - 1; dx <= RENDER_DISTANCE + 1; dx++) {
+        for (int dz = -RENDER_DISTANCE - 1; dz <= RENDER_DISTANCE + 1; dz++) {
             auto chunk = GetOrCreateChunk(pcx + dx, pcz + dz);
-            ChunkState s = chunk->state.load();
-            if (s == ChunkState::Empty) {
+            if (chunk->state == ChunkState::Empty) {
                 chunk->state = ChunkState::Generating;
-                pool.enqueue([chunk]() { 
+                pool->enqueue([chunk]() { 
                     chunk->GenerateData(); 
                     chunk->state = ChunkState::Generated; 
                 });
-            } else if (s == ChunkState::Generated) {
+            }
+        }
+    }
+
+    // ⬇️ Мешим только чанки в радиусе видимости ⬇️
+    for (int dx = -RENDER_DISTANCE; dx <= RENDER_DISTANCE; dx++) {
+        for (int dz = -RENDER_DISTANCE; dz <= RENDER_DISTANCE; dz++) {
+            auto chunk = GetOrCreateChunk(pcx + dx, pcz + dz);
+            if (chunk->state == ChunkState::Generated) {
                 bool neighborsReady = true;
                 int ndx[4] = {1, -1, 0, 0};
                 int ndz[4] = {0, 0, 1, -1};
@@ -72,10 +91,9 @@ void World::Update(Vector3 playerPos) {
                         break;
                     }
                 }
-
                 if (neighborsReady) {
                     chunk->state = ChunkState::Meshing;
-                    pool.enqueue([chunk]() { 
+                    pool->enqueue([chunk]() { 
                         chunk->BuildMeshData(); 
                     });
                 }
@@ -94,9 +112,9 @@ void World::Update(Vector3 playerPos) {
 
     UnloadDistantChunks(playerPos);
 
-    // Безопасное удаление чанков в главном потоке
+    // Безопасная очистка удаленных чанков (только в главном потоке)
     if (!chunksToDelete.empty()) {
-        chunksToDelete.clear(); // Деструкторы вызовутся здесь
+        chunksToDelete.clear();
     }
 }
 
@@ -132,10 +150,16 @@ void World::SetBlock(int x, int y, int z, BlockType type) {
     int lx = x - cx * CHUNK_SIZE, lz = z - cz * CHUNK_SIZE;
 
     auto chunk = GetOrCreateChunk(cx, cz);
+    
+    // ⬇️ ФИКС ПОТЕРИ БЛОКОВ: Если чанк пустой, генерируем синхронно ⬇️
+    if (chunk->state == ChunkState::Empty) {
+        chunk->GenerateData();
+        chunk->state = ChunkState::Generated;
+    }
+
     chunk->SetBlock(lx, y, lz, type);
     chunk->MarkDirty();
 
-    // ⬇️ Безопасно помечаем соседей грязными (не создавая их) ⬇️
     auto markNeighbor = [&](int ncx, int ncz) {
         auto c = GetChunk(ncx, ncz);
         if (c) c->MarkDirty();
@@ -149,7 +173,7 @@ void World::SetBlock(int x, int y, int z, BlockType type) {
 Vector3 World::Raycast(Vector3 origin, Vector3 direction, float maxDistance, bool& hit, Vector3& hitNormal) {
     hit = false;
     hitNormal = {0, 0, 0};
-    for (float t = 0; t < maxDistance; t += 0.05f) {
+    for (float t = 0.001f; t < maxDistance; t += 0.05f) { // ⬅️ Сдвиг начала
         Vector3 checkPos = Vector3Add(origin, Vector3Scale(direction, t));
         int bx = static_cast<int>(std::floor(checkPos.x));
         int by = static_cast<int>(std::floor(checkPos.y));
@@ -177,8 +201,8 @@ void World::UnloadDistantChunks(Vector3 playerPos) {
         int dx = chunk->GetCX() - pcx, dz = chunk->GetCZ() - pcz;
         if (std::abs(dx) > RENDER_DISTANCE + 2 || std::abs(dz) > RENDER_DISTANCE + 2) {
             ChunkState s = chunk->state.load();
-            if (s != ChunkState::Generating && s != ChunkState::Meshing) {
-                // ⬇️ Помечаем соседей грязными при выгрузке ⬇️
+            // ⬇️ ФИКС: Удаляем только если на чанк больше нет ссылок в других потоках ⬇️
+            if (s != ChunkState::Generating && s != ChunkState::Meshing && chunk.use_count() == 1) {
                 auto markNeighbor = [&](int ncx, int ncz) {
                     auto it = chunks.find(Hash(ncx, ncz));
                     if (it != chunks.end()) it->second->MarkDirty();
@@ -193,7 +217,7 @@ void World::UnloadDistantChunks(Vector3 playerPos) {
         }
     }
     for (long long key : toRemove) {
-        chunksToDelete.push_back(chunks[key]); // Перекладываем в очередь на удаление
+        chunksToDelete.push_back(chunks[key]);
         chunks.erase(key);
     }
 }

@@ -9,6 +9,7 @@
 class World {
 public:
     static void Init();
+    static void Shutdown(); // ⬅️ Новый метод
     static void Update(Vector3 playerPos);
     static void Draw(Camera3D camera);
 
@@ -19,7 +20,7 @@ public:
 
 private:
     static std::unordered_map<long long, std::shared_ptr<Chunk>> chunks;
-    static std::vector<std::shared_ptr<Chunk>> chunksToDelete; // ⬅️ Очередь безопасного удаления
+    static std::vector<std::shared_ptr<Chunk>> chunksToDelete;
     static std::shared_mutex chunksMutex;
     static long long Hash(int cx, int cz);
     static std::shared_ptr<Chunk> GetChunk(int cx, int cz);

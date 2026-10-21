@@ -15,7 +15,7 @@ Chunk::~Chunk() {
 }
 
 void Chunk::GenerateData() {
-    std::unique_lock lock(blocksMutex); // ⬅️ Защита при записи
+    std::unique_lock lock(blocksMutex);
 
     for (int x = 0; x < CHUNK_SIZE; x++) {
         for (int z = 0; z < CHUNK_SIZE; z++) {
@@ -41,6 +41,7 @@ void Chunk::GenerateData() {
 
     for (int x = 0; x < CHUNK_SIZE; x++) {
         for (int z = 0; z < CHUNK_SIZE; z++) {
+            // Для CHUNK_SIZE = 4, x=1,2 - безопасная зона
             if (x < 1 || x >= CHUNK_SIZE - 1 || z < 1 || z >= CHUNK_SIZE - 1) continue; 
 
             int worldX = cx * CHUNK_SIZE + x;
@@ -63,10 +64,17 @@ void Chunk::GenerateData() {
                     for (int lx = -radius; lx <= radius; lx++) {
                         for (int lz = -radius; lz <= radius; lz++) {
                             if (radius == 2 && abs(lx) == 2 && abs(lz) == 2) continue;
-                            int leafX = x + lx, leafY = topY + ly, leafZ = z + lz;
-                            if (leafY >= 0 && leafY < CHUNK_HEIGHT && blocks[leafX][leafY][leafZ] == BlockType::Air) {
-                                if (Utils::TreeHash(leafX + leafY * 17, leafZ + leafY * 23) % 15 != 0) {
-                                    blocks[leafX][leafY][leafZ] = BlockType::Leaves;
+                            
+                            int leafX = x + lx;
+                            int leafY = topY + ly;
+                            int leafZ = z + lz;
+
+                            // ⬇️ КРИТИЧЕСКИЙ ФИКС: Проверка выхода за границы массива ⬇️
+                            if (leafX >= 0 && leafX < CHUNK_SIZE && leafY >= 0 && leafY < CHUNK_HEIGHT && leafZ >= 0 && leafZ < CHUNK_SIZE) {
+                                if (blocks[leafX][leafY][leafZ] == BlockType::Air) {
+                                    if (Utils::TreeHash(leafX + leafY * 17, leafZ + leafY * 23) % 15 != 0) {
+                                        blocks[leafX][leafY][leafZ] = BlockType::Leaves;
+                                    }
                                 }
                             }
                         }
@@ -78,9 +86,8 @@ void Chunk::GenerateData() {
 }
 
 BlockType Chunk::GetBlock(int x, int y, int z) const {
-    std::shared_lock lock(blocksMutex); // ⬅️ Потокобезопасное чтение
-    if (x < 0 || x >= CHUNK_SIZE || y < 0 || y >= CHUNK_HEIGHT || z < 0 || z >= CHUNK_SIZE)
-        return BlockType::Air;
+    std::shared_lock lock(blocksMutex);
+    if (x < 0 || x >= CHUNK_SIZE || y < 0 || y >= CHUNK_HEIGHT || z < 0 || z >= CHUNK_SIZE) return BlockType::Air;
     return blocks[x][y][z];
 }
 
@@ -92,11 +99,8 @@ void Chunk::SetBlock(int x, int y, int z, BlockType type) {
 
 void Chunk::MarkDirty() {
     ChunkState s = state.load();
-    if (s == ChunkState::Loaded) {
-        state = ChunkState::Generated;
-    } else if (s == ChunkState::Meshing || s == ChunkState::MeshReady) {
-        needsRemesh = true;
-    }
+    if (s == ChunkState::Loaded) state = ChunkState::Generated;
+    else if (s == ChunkState::Meshing || s == ChunkState::MeshReady) needsRemesh = true;
 }
 
 void Chunk::BuildMeshData() {
@@ -127,7 +131,6 @@ void Chunk::BuildMeshData() {
                     if (nx >= 0 && nx < CHUNK_SIZE && ny >= 0 && ny < CHUNK_HEIGHT && nz >= 0 && nz < CHUNK_SIZE) {
                         neighborSolid = (blocks[nx][ny][nz] != BlockType::Air);
                     } else {
-                        // Мы вызываем GetBlock из World, который защищен World::chunksMutex
                         BlockType neighbor = World::GetBlock(cx * CHUNK_SIZE + nx, ny, cz * CHUNK_SIZE + nz);
                         neighborSolid = (neighbor != BlockType::Air);
                     }
@@ -139,7 +142,7 @@ void Chunk::BuildMeshData() {
                     if (f == 3) texIndex = info.texBottom; 
 
                     Rectangle uv = TextureAtlas::GetUV(texIndex);
-                    float inset = 1.0f / 512.0f; // ⬅️ Уменьшенный UV inset
+                    float inset = 1.0f / 512.0f;
                     uv.x += inset; uv.y += inset;
                     uv.width -= inset * 2.0f; uv.height -= inset * 2.0f;
 
@@ -199,12 +202,9 @@ void Chunk::BuildMeshData() {
                     }
 
                     for (int i = 0; i < 4; i++) {
-                        pendingVertices.push_back(verts[i][0]);
-                        pendingVertices.push_back(verts[i][1]);
-                        pendingVertices.push_back(verts[i][2]);
+                        pendingVertices.push_back(verts[i][0]); pendingVertices.push_back(verts[i][1]); pendingVertices.push_back(verts[i][2]);
                         unsigned char shade = faceBrightness[f];
-                        pendingColors.push_back(shade); pendingColors.push_back(shade);
-                        pendingColors.push_back(shade); pendingColors.push_back(255);
+                        pendingColors.push_back(shade); pendingColors.push_back(shade); pendingColors.push_back(shade); pendingColors.push_back(255);
                         pendingTexcoords.push_back(uvs[i][0]); pendingTexcoords.push_back(uvs[i][1]);
                     }
 
@@ -229,33 +229,38 @@ void Chunk::BuildMeshData() {
 }
 
 void Chunk::UploadToGPU() {
+    std::unique_lock chunkLock(chunkMutex); // Защищаем pendingVertices
+
     UnloadMesh();
 
-    if (pendingVertices.empty()) {
+    if (!pendingVertices.empty()) {
+        mesh.vertexCount = static_cast<int>(pendingVertices.size() / 3);
+        mesh.triangleCount = static_cast<int>(pendingIndices.size() / 3);
+        
+        mesh.vertices = (float*)MemAlloc(pendingVertices.size() * sizeof(float));
+        mesh.texcoords = (float*)MemAlloc(pendingTexcoords.size() * sizeof(float));
+        mesh.colors = (unsigned char*)MemAlloc(pendingColors.size() * sizeof(unsigned char));
+        mesh.indices = (unsigned short*)MemAlloc(pendingIndices.size() * sizeof(unsigned short));
+
+        memcpy(mesh.vertices, pendingVertices.data(), pendingVertices.size() * sizeof(float));
+        memcpy(mesh.texcoords, pendingTexcoords.data(), pendingTexcoords.size() * sizeof(float));
+        memcpy(mesh.colors, pendingColors.data(), pendingColors.size() * sizeof(unsigned char));
+        memcpy(mesh.indices, pendingIndices.data(), pendingIndices.size() * sizeof(unsigned short));
+
+        UploadMesh(&mesh, false);
+        model = LoadModelFromMesh(mesh);
+        model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = TextureAtlas::GetTexture();
+        meshBuilt = true;
+    } else {
         meshBuilt = false;
-        state = ChunkState::Loaded;
-        return;
     }
 
-    mesh.vertexCount = static_cast<int>(pendingVertices.size() / 3);
-    mesh.triangleCount = static_cast<int>(pendingIndices.size() / 3);
-    
-    mesh.vertices = (float*)MemAlloc(pendingVertices.size() * sizeof(float));
-    mesh.texcoords = (float*)MemAlloc(pendingTexcoords.size() * sizeof(float));
-    mesh.colors = (unsigned char*)MemAlloc(pendingColors.size() * sizeof(unsigned char));
-    mesh.indices = (unsigned short*)MemAlloc(pendingIndices.size() * sizeof(unsigned short));
-
-    memcpy(mesh.vertices, pendingVertices.data(), pendingVertices.size() * sizeof(float));
-    memcpy(mesh.texcoords, pendingTexcoords.data(), pendingTexcoords.size() * sizeof(float));
-    memcpy(mesh.colors, pendingColors.data(), pendingColors.size() * sizeof(unsigned char));
-    memcpy(mesh.indices, pendingIndices.data(), pendingIndices.size() * sizeof(unsigned short));
-
-    UploadMesh(&mesh, false);
-    model = LoadModelFromMesh(mesh);
-    model.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = TextureAtlas::GetTexture();
-    
-    meshBuilt = true;
-    state = ChunkState::Loaded;
+    // ⬇️ КРИТИЧЕСКИЙ ФИКС: Проверяем needsRemesh после загрузки ⬇️
+    if (needsRemesh.exchange(false)) {
+        state = ChunkState::Generated;
+    } else {
+        state = ChunkState::Loaded;
+    }
 }
 
 void Chunk::Draw() const {
