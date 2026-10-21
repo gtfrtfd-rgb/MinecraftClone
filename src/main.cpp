@@ -14,26 +14,33 @@ int main() {
 
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_VSYNC_HINT);
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Minecraft Clone - raylib");
-    SetTargetFPS(0); 
+    SetTargetFPS(TARGET_FPS); // ⬅️ Используем TARGET_FPS
     DisableCursor();
 
     TextureAtlas::Init();
     BlockRegistry::Init();
     World::Init();
 
+    // ⬇️ Предварительная генерация чанков вокруг спавна (решение падения) ⬇️
+    for (int dx = -1; dx <= 1; dx++) {
+        for (int dz = -1; dz <= 1; dz++) {
+            auto chunk = World::GetOrCreateChunk(dx, dz);
+            chunk->GenerateData();
+            chunk->state = ChunkState::Generated;
+        }
+    }
     World::Update({0, 0, 0}); 
 
     Player player;
     player.SetPosition({0.5f, 60.0f, 0.5f});
-    
-    Inventory inventory; // ⬅️ Создаем инвентарь
+    Inventory inventory;
 
     while (!WindowShouldClose()) {
         float dt = GetFrameTime();
 
         World::Update(player.GetPosition());
         player.Update(dt);
-        inventory.Update(); // ⬅️ Обновляем выбор слота
+        inventory.Update(); 
 
         Vector3 origin = player.GetCamera().position;
         Vector3 dir = player.GetForward();
@@ -43,28 +50,28 @@ int main() {
 
         if (hit) {
             if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                World::SetBlock(static_cast<int>(hitBlock.x),
-                                static_cast<int>(hitBlock.y),
-                                static_cast<int>(hitBlock.z),
-                                BlockType::Air);
+                World::SetBlock(static_cast<int>(hitBlock.x), static_cast<int>(hitBlock.y), static_cast<int>(hitBlock.z), BlockType::Air);
             }
             if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
-                Vector3 placePos = Vector3Add(hitBlock, hitNormal);
-                int px = static_cast<int>(placePos.x);
-                int py = static_cast<int>(placePos.y);
-                int pz = static_cast<int>(placePos.z);
+                // ⬇️ Проверка пустого слота (Баг 10) ⬇️
+                BlockType selectedBlock = inventory.GetSelectedBlock();
+                if (selectedBlock != BlockType::Air) {
+                    Vector3 placePos = Vector3Add(hitBlock, hitNormal);
+                    int px = static_cast<int>(placePos.x);
+                    int py = static_cast<int>(placePos.y);
+                    int pz = static_cast<int>(placePos.z);
 
-                Vector3 playerPos = player.GetPosition();
-                bool insidePlayer = (px >= static_cast<int>(floorf(playerPos.x - PLAYER_RADIUS)) &&
-                                     px <= static_cast<int>(floorf(playerPos.x + PLAYER_RADIUS)) &&
-                                     py >= static_cast<int>(floorf(playerPos.y)) &&
-                                     py <= static_cast<int>(floorf(playerPos.y + PLAYER_HEIGHT)) &&
-                                     pz >= static_cast<int>(floorf(playerPos.z - PLAYER_RADIUS)) &&
-                                     pz <= static_cast<int>(floorf(playerPos.z + PLAYER_RADIUS)));
+                    Vector3 playerPos = player.GetPosition();
+                    bool insidePlayer = (px >= static_cast<int>(floorf(playerPos.x - PLAYER_RADIUS)) &&
+                                         px <= static_cast<int>(floorf(playerPos.x + PLAYER_RADIUS)) &&
+                                         py >= static_cast<int>(floorf(playerPos.y)) &&
+                                         py <= static_cast<int>(floorf(playerPos.y + PLAYER_HEIGHT)) &&
+                                         pz >= static_cast<int>(floorf(playerPos.z - PLAYER_RADIUS)) &&
+                                         pz <= static_cast<int>(floorf(playerPos.z + PLAYER_RADIUS)));
 
-                if (!insidePlayer) {
-                    // ⬇️ Ставим блок, выбранный в инвентаре ⬇️
-                    World::SetBlock(px, py, pz, inventory.GetSelectedBlock());
+                    if (!insidePlayer) {
+                        World::SetBlock(px, py, pz, selectedBlock);
+                    }
                 }
             }
         }
@@ -74,21 +81,18 @@ int main() {
 
         BeginMode3D(player.GetCamera());
         World::Draw(player.GetCamera());
-        if (hit) {
-            UI::DrawBlockHighlight(hitBlock);
-        }
+        if (hit) UI::DrawBlockHighlight(hitBlock);
         EndMode3D();
 
         player.DrawCrosshair();
         UI::Draw();
-        inventory.Draw(GetScreenWidth(), GetScreenHeight()); // ⬅️ Рисуем хотбар
+        inventory.Draw(GetScreenWidth(), GetScreenHeight());
 
         if (hit) {
+            // ⬇️ Используем GetScreenHeight() вместо SCREEN_HEIGHT ⬇️
             DrawText(TextFormat("Looking at: %d, %d, %d",
-                                static_cast<int>(hitBlock.x),
-                                static_cast<int>(hitBlock.y),
-                                static_cast<int>(hitBlock.z)),
-                     10, SCREEN_HEIGHT - 30, 16, RAYWHITE);
+                                static_cast<int>(hitBlock.x), static_cast<int>(hitBlock.y), static_cast<int>(hitBlock.z)),
+                     10, GetScreenHeight() - 30, 16, RAYWHITE);
         }
 
         EndDrawing();

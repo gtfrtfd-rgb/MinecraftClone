@@ -6,9 +6,9 @@
 Texture2D TextureAtlas::atlas = { 0 };
 
 static unsigned int Hash2D(int x, int y, int seed) {
-    unsigned int h = x * 374761393 + y * 668265263 + seed * 1442695040888963407ULL;
-    h = (h ^ (h >> 13)) * 1274126177;
-    return h ^ (h >> 16);
+    unsigned int h = (unsigned int)x * 374761393U + (unsigned int)y * 668265263U + (unsigned int)seed * 1442695040U;
+    h = (h ^ (h >> 13U)) * 1274126177U;
+    return h ^ (h >> 16U);
 }
 
 void TextureAtlas::Init() {
@@ -65,24 +65,16 @@ void TextureAtlas::Init() {
         }
     }
 
-    // 5. ЛИСТВА (Leaves) - ⬇️ СВЕТЛЕЕ И СОЧНЕЕ ⬇️
+    // 5. ЛИСТВА (Leaves)
     for (int x = 0; x < TILE_SIZE; x++) {
         for (int y = 0; y < TILE_SIZE; y++) {
             unsigned int n = Hash2D(x, y, 8) % 100;
-            
             Color c;
-            if (n < 20) c = { 30, 80, 20, 255 };        // Темно-зеленый (тени)
-            else if (n < 70) c = { 55, 120, 40, 255 };  // Базовый сочный
-            else c = { 80, 160, 60, 255 };              // Светлые пятна
-
-            // Яркие блики для объема
+            if (n < 20) c = { 30, 80, 20, 255 };        
+            else if (n < 70) c = { 55, 120, 40, 255 };  
+            else c = { 80, 160, 60, 255 };              
             if (Hash2D(x, y, 9) % 15 == 0) c = { 110, 190, 80, 255 };
-
-            // Легкое затемнение по краям текстуры, чтобы выделить грани куба
-            if (x == 0 || y == 0 || x == TILE_SIZE-1 || y == TILE_SIZE-1) {
-                c.r -= 15; c.g -= 15; c.b -= 15;
-            }
-
+            if (x == 0 || y == 0 || x == TILE_SIZE-1 || y == TILE_SIZE-1) { c.r -= 15; c.g -= 15; c.b -= 15; }
             ImageDrawPixel(&img, 6 * TILE_SIZE + x, 0 * TILE_SIZE + y, c);
         }
     }
@@ -143,14 +135,8 @@ void TextureAtlas::Init() {
     UnloadImage(img);
 }
 
-void TextureAtlas::Unload() {
-    UnloadTexture(atlas);
-}
-
-Texture2D TextureAtlas::GetTexture() {
-    return atlas;
-}
-
+void TextureAtlas::Unload() { UnloadTexture(atlas); }
+Texture2D TextureAtlas::GetTexture() { return atlas; }
 Rectangle TextureAtlas::GetUV(int tileIndex) {
     int tx = tileIndex % 16;
     int ty = tileIndex / 16;

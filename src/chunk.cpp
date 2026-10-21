@@ -15,7 +15,8 @@ Chunk::~Chunk() {
 }
 
 void Chunk::GenerateData() {
-    // 1. Генерация ландшафта
+    std::unique_lock lock(blocksMutex); // ⬅️ Защита при записи
+
     for (int x = 0; x < CHUNK_SIZE; x++) {
         for (int z = 0; z < CHUNK_SIZE; z++) {
             int worldX = cx * CHUNK_SIZE + x;
@@ -38,59 +39,34 @@ void Chunk::GenerateData() {
         }
     }
 
-    // 2. Генерация деревьев
     for (int x = 0; x < CHUNK_SIZE; x++) {
         for (int z = 0; z < CHUNK_SIZE; z++) {
-            
-            // Отступаем от краев чанка
-            if (x < 2 || x >= CHUNK_SIZE - 2 || z < 2 || z >= CHUNK_SIZE - 2) {
-                continue; 
-            }
+            if (x < 1 || x >= CHUNK_SIZE - 1 || z < 1 || z >= CHUNK_SIZE - 1) continue; 
 
             int worldX = cx * CHUNK_SIZE + x;
             int worldZ = cz * CHUNK_SIZE + z;
 
             int height = CHUNK_HEIGHT - 1;
-            while (height > 0 && blocks[x][height][z] == BlockType::Air) {
-                height--;
-            }
+            while (height > 0 && blocks[x][height][z] == BlockType::Air) height--;
 
-            // Лесной шум (снизили частоту и шанс появления)
             float forestNoise = Utils::Noise2D(worldX * 0.01f, worldZ * 0.01f);
-            
-            // ⬇️ Шанс 1 к 120, чтобы лес был просторным ⬇️
             if (forestNoise > 0.1f && blocks[x][height][z] == BlockType::Grass && (Utils::TreeHash(worldX, worldZ) % 120) == 0) {
-                
-                // Ствол высотой 5-7 блоков
                 int trunkHeight = 5 + (Utils::TreeHash(worldX + 1, worldZ + 1) % 3); 
                 int topY = height + trunkHeight;
 
-                // Сажаем ствол
                 for (int ty = 1; ty <= trunkHeight; ty++) {
-                    if (height + ty < CHUNK_HEIGHT) {
-                        blocks[x][height + ty][z] = BlockType::Wood;
-                    }
+                    if (height + ty < CHUNK_HEIGHT) blocks[x][height + ty][z] = BlockType::Wood;
                 }
 
-                // Строим крону 5x5. Начинаем с ly = -1, чтобы листва налезала на ствол!
                 for (int ly = -1; ly <= 2; ly++) {
                     int radius = (ly == 2) ? 1 : 2; 
                     for (int lx = -radius; lx <= radius; lx++) {
                         for (int lz = -radius; lz <= radius; lz++) {
-                            
-                            // Обрубаем углы у широких слоев
                             if (radius == 2 && abs(lx) == 2 && abs(lz) == 2) continue;
-                            
-                            int leafX = x + lx;
-                            int leafY = topY + ly;
-                            int leafZ = z + lz;
-
-                            if (leafY >= 0 && leafY < CHUNK_HEIGHT) {
-                                if (blocks[leafX][leafY][leafZ] == BlockType::Air) {
-                                    // ⬇️ Исправлены дырки: используем leafY в хеше, чтобы дырки не были колоннами ⬇️
-                                    if (Utils::TreeHash(leafX + leafY * 17, leafZ + leafY * 23) % 15 != 0) {
-                                        blocks[leafX][leafY][leafZ] = BlockType::Leaves;
-                                    }
+                            int leafX = x + lx, leafY = topY + ly, leafZ = z + lz;
+                            if (leafY >= 0 && leafY < CHUNK_HEIGHT && blocks[leafX][leafY][leafZ] == BlockType::Air) {
+                                if (Utils::TreeHash(leafX + leafY * 17, leafZ + leafY * 23) % 15 != 0) {
+                                    blocks[leafX][leafY][leafZ] = BlockType::Leaves;
                                 }
                             }
                         }
@@ -102,32 +78,35 @@ void Chunk::GenerateData() {
 }
 
 BlockType Chunk::GetBlock(int x, int y, int z) const {
+    std::shared_lock lock(blocksMutex); // ⬅️ Потокобезопасное чтение
     if (x < 0 || x >= CHUNK_SIZE || y < 0 || y >= CHUNK_HEIGHT || z < 0 || z >= CHUNK_SIZE)
         return BlockType::Air;
     return blocks[x][y][z];
 }
 
 void Chunk::SetBlock(int x, int y, int z, BlockType type) {
-    std::lock_guard<std::mutex> lock(chunkMutex);
-
-    if (x < 0 || x >= CHUNK_SIZE || y < 0 || y >= CHUNK_HEIGHT || z < 0 || z >= CHUNK_SIZE)
-        return;
+    std::unique_lock lock(blocksMutex);
+    if (x < 0 || x >= CHUNK_SIZE || y < 0 || y >= CHUNK_HEIGHT || z < 0 || z >= CHUNK_SIZE) return;
     blocks[x][y][z] = type;
-    needsRemesh = true;
+}
 
+void Chunk::MarkDirty() {
     ChunkState s = state.load();
-    if (s == ChunkState::Loaded || s == ChunkState::MeshReady) {
+    if (s == ChunkState::Loaded) {
         state = ChunkState::Generated;
+    } else if (s == ChunkState::Meshing || s == ChunkState::MeshReady) {
+        needsRemesh = true;
     }
 }
 
 void Chunk::BuildMeshData() {
+    std::unique_lock chunkLock(chunkMutex);
     pendingVertices.clear();
     pendingTexcoords.clear();
     pendingColors.clear();
     pendingIndices.clear();
 
-    std::lock_guard<std::mutex> lock(chunkMutex);
+    std::shared_lock blocksLock(blocksMutex);
 
     unsigned short vertexIndex = 0;
     const int dx[6] = { 1, -1, 0, 0, 0, 0 };
@@ -140,18 +119,15 @@ void Chunk::BuildMeshData() {
             for (int z = 0; z < CHUNK_SIZE; z++) {
                 BlockType current = blocks[x][y][z];
                 if (current == BlockType::Air) continue;
-
                 const BlockInfo& info = BlockRegistry::Get(current);
 
                 for (int f = 0; f < 6; f++) {
-                    int nx = x + dx[f];
-                    int ny = y + dy[f];
-                    int nz = z + dz[f];
-
+                    int nx = x + dx[f], ny = y + dy[f], nz = z + dz[f];
                     bool neighborSolid = false;
                     if (nx >= 0 && nx < CHUNK_SIZE && ny >= 0 && ny < CHUNK_HEIGHT && nz >= 0 && nz < CHUNK_SIZE) {
                         neighborSolid = (blocks[nx][ny][nz] != BlockType::Air);
                     } else {
+                        // Мы вызываем GetBlock из World, который защищен World::chunksMutex
                         BlockType neighbor = World::GetBlock(cx * CHUNK_SIZE + nx, ny, cz * CHUNK_SIZE + nz);
                         neighborSolid = (neighbor != BlockType::Air);
                     }
@@ -163,77 +139,62 @@ void Chunk::BuildMeshData() {
                     if (f == 3) texIndex = info.texBottom; 
 
                     Rectangle uv = TextureAtlas::GetUV(texIndex);
-                    // Увеличили отступ, чтобы черные полосы точно исчезли
-                    float inset = 0.01f; 
+                    float inset = 1.0f / 512.0f; // ⬅️ Уменьшенный UV inset
                     uv.x += inset; uv.y += inset;
                     uv.width -= inset * 2.0f; uv.height -= inset * 2.0f;
 
-                    float fx = static_cast<float>(x);
-                    float fy = static_cast<float>(y);
-                    float fz = static_cast<float>(z);
+                    float fx = (float)x, fy = (float)y, fz = (float)z;
                     float verts[4][3];
                     float uvs[4][2];
 
                     switch (f) {
-                        case 0: // +X
-                            verts[0][0] = fx + 1.0f; verts[0][1] = fy;        verts[0][2] = fz;
-                            verts[1][0] = fx + 1.0f; verts[1][1] = fy + 1.0f; verts[1][2] = fz;
-                            verts[2][0] = fx + 1.0f; verts[2][1] = fy + 1.0f; verts[2][2] = fz + 1.0f;
-                            verts[3][0] = fx + 1.0f; verts[3][1] = fy;        verts[3][2] = fz + 1.0f;
-                            uvs[0][0] = uv.x; uvs[0][1] = uv.y + uv.height;
-                            uvs[1][0] = uv.x; uvs[1][1] = uv.y;
-                            uvs[2][0] = uv.x + uv.width; uvs[2][1] = uv.y;
-                            uvs[3][0] = uv.x + uv.width; uvs[3][1] = uv.y + uv.height;
+                        case 0: 
+                            verts[0][0]=fx+1; verts[0][1]=fy;   verts[0][2]=fz;
+                            verts[1][0]=fx+1; verts[1][1]=fy+1; verts[1][2]=fz;
+                            verts[2][0]=fx+1; verts[2][1]=fy+1; verts[2][2]=fz+1;
+                            verts[3][0]=fx+1; verts[3][1]=fy;   verts[3][2]=fz+1;
+                            uvs[0][0]=uv.x; uvs[0][1]=uv.y+uv.height; uvs[1][0]=uv.x; uvs[1][1]=uv.y;
+                            uvs[2][0]=uv.x+uv.width; uvs[2][1]=uv.y; uvs[3][0]=uv.x+uv.width; uvs[3][1]=uv.y+uv.height;
                             break;
-                        case 1: // -X
-                            verts[0][0] = fx; verts[0][1] = fy;        verts[0][2] = fz + 1.0f;
-                            verts[1][0] = fx; verts[1][1] = fy + 1.0f; verts[1][2] = fz + 1.0f;
-                            verts[2][0] = fx; verts[2][1] = fy + 1.0f; verts[2][2] = fz;
-                            verts[3][0] = fx; verts[3][1] = fy;        verts[3][2] = fz;
-                            uvs[0][0] = uv.x + uv.width; uvs[0][1] = uv.y + uv.height;
-                            uvs[1][0] = uv.x + uv.width; uvs[1][1] = uv.y;
-                            uvs[2][0] = uv.x; uvs[2][1] = uv.y;
-                            uvs[3][0] = uv.x; uvs[3][1] = uv.y + uv.height;
+                        case 1: 
+                            verts[0][0]=fx; verts[0][1]=fy;   verts[0][2]=fz+1;
+                            verts[1][0]=fx; verts[1][1]=fy+1; verts[1][2]=fz+1;
+                            verts[2][0]=fx; verts[2][1]=fy+1; verts[2][2]=fz;
+                            verts[3][0]=fx; verts[3][1]=fy;   verts[3][2]=fz;
+                            uvs[0][0]=uv.x+uv.width; uvs[0][1]=uv.y+uv.height; uvs[1][0]=uv.x+uv.width; uvs[1][1]=uv.y;
+                            uvs[2][0]=uv.x; uvs[2][1]=uv.y; uvs[3][0]=uv.x; uvs[3][1]=uv.y+uv.height;
                             break;
-                        case 2: // +Y
-                            verts[0][0] = fx; verts[0][1] = fy + 1.0f; verts[0][2] = fz;
-                            verts[1][0] = fx; verts[1][1] = fy + 1.0f; verts[1][2] = fz + 1.0f;
-                            verts[2][0] = fx + 1.0f; verts[2][1] = fy + 1.0f; verts[2][2] = fz + 1.0f;
-                            verts[3][0] = fx + 1.0f; verts[3][1] = fy + 1.0f; verts[3][2] = fz;
-                            uvs[0][0] = uv.x; uvs[0][1] = uv.y + uv.height;
-                            uvs[1][0] = uv.x + uv.width; uvs[1][1] = uv.y + uv.height;
-                            uvs[2][0] = uv.x + uv.width; uvs[2][1] = uv.y;
-                            uvs[3][0] = uv.x; uvs[3][1] = uv.y;
+                        case 2: 
+                            verts[0][0]=fx; verts[0][1]=fy+1; verts[0][2]=fz;
+                            verts[1][0]=fx; verts[1][1]=fy+1; verts[1][2]=fz+1;
+                            verts[2][0]=fx+1; verts[2][1]=fy+1; verts[2][2]=fz+1;
+                            verts[3][0]=fx+1; verts[3][1]=fy+1; verts[3][2]=fz;
+                            uvs[0][0]=uv.x; uvs[0][1]=uv.y+uv.height; uvs[1][0]=uv.x+uv.width; uvs[1][1]=uv.y+uv.height;
+                            uvs[2][0]=uv.x+uv.width; uvs[2][1]=uv.y; uvs[3][0]=uv.x; uvs[3][1]=uv.y;
                             break;
-                        case 3: // -Y
-                            verts[0][0] = fx; verts[0][1] = fy; verts[0][2] = fz + 1.0f;
-                            verts[1][0] = fx; verts[1][1] = fy; verts[1][2] = fz;
-                            verts[2][0] = fx + 1.0f; verts[2][1] = fy; verts[2][2] = fz;
-                            verts[3][0] = fx + 1.0f; verts[3][1] = fy; verts[3][2] = fz + 1.0f;
-                            uvs[0][0] = uv.x; uvs[0][1] = uv.y + uv.height;
-                            uvs[1][0] = uv.x + uv.width; uvs[1][1] = uv.y + uv.height;
-                            uvs[2][0] = uv.x + uv.width; uvs[2][1] = uv.y;
-                            uvs[3][0] = uv.x; uvs[3][1] = uv.y;
+                        case 3: 
+                            verts[0][0]=fx; verts[0][1]=fy; verts[0][2]=fz+1;
+                            verts[1][0]=fx; verts[1][1]=fy; verts[1][2]=fz;
+                            verts[2][0]=fx+1; verts[2][1]=fy; verts[2][2]=fz;
+                            verts[3][0]=fx+1; verts[3][1]=fy; verts[3][2]=fz+1;
+                            uvs[0][0]=uv.x; uvs[0][1]=uv.y+uv.height; uvs[1][0]=uv.x+uv.width; uvs[1][1]=uv.y+uv.height;
+                            uvs[2][0]=uv.x+uv.width; uvs[2][1]=uv.y; uvs[3][0]=uv.x; uvs[3][1]=uv.y;
                             break;
-                        case 4: // +Z
-                            verts[0][0] = fx + 1.0f; verts[0][1] = fy; verts[0][2] = fz + 1.0f;
-                            verts[1][0] = fx + 1.0f; verts[1][1] = fy + 1.0f; verts[1][2] = fz + 1.0f;
-                            verts[2][0] = fx; verts[2][1] = fy + 1.0f; verts[2][2] = fz + 1.0f;
-                            verts[3][0] = fx; verts[3][1] = fy; verts[3][2] = fz + 1.0f;
-                            uvs[0][0] = uv.x; uvs[0][1] = uv.y + uv.height;
-                            uvs[1][0] = uv.x; uvs[1][1] = uv.y;
-                            uvs[2][0] = uv.x + uv.width; uvs[2][1] = uv.y;
-                            uvs[3][0] = uv.x + uv.width; uvs[3][1] = uv.y + uv.height;
+                        case 4: 
+                            verts[0][0]=fx+1; verts[0][1]=fy; verts[0][2]=fz+1;
+                            verts[1][0]=fx+1; verts[1][1]=fy+1; verts[1][2]=fz+1;
+                            verts[2][0]=fx; verts[2][1]=fy+1; verts[2][2]=fz+1;
+                            verts[3][0]=fx; verts[3][1]=fy; verts[3][2]=fz+1;
+                            uvs[0][0]=uv.x; uvs[0][1]=uv.y+uv.height; uvs[1][0]=uv.x; uvs[1][1]=uv.y;
+                            uvs[2][0]=uv.x+uv.width; uvs[2][1]=uv.y; uvs[3][0]=uv.x+uv.width; uvs[3][1]=uv.y+uv.height;
                             break;
-                        case 5: // -Z
-                            verts[0][0] = fx; verts[0][1] = fy; verts[0][2] = fz;
-                            verts[1][0] = fx; verts[1][1] = fy + 1.0f; verts[1][2] = fz;
-                            verts[2][0] = fx + 1.0f; verts[2][1] = fy + 1.0f; verts[2][2] = fz;
-                            verts[3][0] = fx + 1.0f; verts[3][1] = fy; verts[3][2] = fz;
-                            uvs[0][0] = uv.x + uv.width; uvs[0][1] = uv.y + uv.height;
-                            uvs[1][0] = uv.x + uv.width; uvs[1][1] = uv.y;
-                            uvs[2][0] = uv.x; uvs[2][1] = uv.y;
-                            uvs[3][0] = uv.x; uvs[3][1] = uv.y + uv.height;
+                        case 5: 
+                            verts[0][0]=fx; verts[0][1]=fy; verts[0][2]=fz;
+                            verts[1][0]=fx; verts[1][1]=fy+1; verts[1][2]=fz;
+                            verts[2][0]=fx+1; verts[2][1]=fy+1; verts[2][2]=fz;
+                            verts[3][0]=fx+1; verts[3][1]=fy; verts[3][2]=fz;
+                            uvs[0][0]=uv.x+uv.width; uvs[0][1]=uv.y+uv.height; uvs[1][0]=uv.x+uv.width; uvs[1][1]=uv.y;
+                            uvs[2][0]=uv.x; uvs[2][1]=uv.y; uvs[3][0]=uv.x; uvs[3][1]=uv.y+uv.height;
                             break;
                     }
 
@@ -242,12 +203,9 @@ void Chunk::BuildMeshData() {
                         pendingVertices.push_back(verts[i][1]);
                         pendingVertices.push_back(verts[i][2]);
                         unsigned char shade = faceBrightness[f];
-                        pendingColors.push_back(shade);
-                        pendingColors.push_back(shade);
-                        pendingColors.push_back(shade);
-                        pendingColors.push_back(255);
-                        pendingTexcoords.push_back(uvs[i][0]);
-                        pendingTexcoords.push_back(uvs[i][1]);
+                        pendingColors.push_back(shade); pendingColors.push_back(shade);
+                        pendingColors.push_back(shade); pendingColors.push_back(255);
+                        pendingTexcoords.push_back(uvs[i][0]); pendingTexcoords.push_back(uvs[i][1]);
                     }
 
                     pendingIndices.push_back(vertexIndex);
@@ -302,11 +260,7 @@ void Chunk::UploadToGPU() {
 
 void Chunk::Draw() const {
     if (meshBuilt && mesh.vertexCount > 0) {
-        Vector3 worldPos = { 
-            static_cast<float>(cx * CHUNK_SIZE), 
-            0.0f, 
-            static_cast<float>(cz * CHUNK_SIZE) 
-        };
+        Vector3 worldPos = { (float)(cx * CHUNK_SIZE), 0.0f, (float)(cz * CHUNK_SIZE) };
         DrawModel(model, worldPos, 1.0f, WHITE);
     }
 }

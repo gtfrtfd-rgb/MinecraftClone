@@ -6,14 +6,10 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 
 enum class ChunkState {
-    Empty,       
-    Generating,  
-    Generated,   
-    Meshing,     
-    MeshReady,   
-    Loaded       
+    Empty, Generating, Generated, Meshing, MeshReady, Loaded
 };
 
 class Chunk {
@@ -28,6 +24,7 @@ public:
 
     BlockType GetBlock(int x, int y, int z) const;
     void SetBlock(int x, int y, int z, BlockType type);
+    void MarkDirty(); // ⬅️ Безопасная пометка на перестройку
 
     std::atomic<ChunkState> state;
     
@@ -46,8 +43,9 @@ private:
     Model model = {0};
     bool meshBuilt = false;
 
-    std::mutex chunkMutex; // Защита от одновременного чтения/записи
-    std::atomic<bool> needsRemesh{false}; // Флаг: блок сломали во время генерации
+    std::mutex chunkMutex; // Защита pending-векторов
+    mutable std::shared_mutex blocksMutex; // Защита массива blocks (чтение/запись)
+    std::atomic<bool> needsRemesh{false};
 
     void UnloadMesh();
 };
