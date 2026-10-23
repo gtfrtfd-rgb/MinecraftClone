@@ -35,7 +35,16 @@ int main() {
     Inventory inventory;
 
     while (!WindowShouldClose()) {
+        // ⬇️ ФИКС: Не выполняем логику, пока окно свернуто ⬇️
+        if (IsWindowMinimized()) {
+            WaitTime(0.1); // Спим, чтобы не грузить процессор
+            continue;
+        }
+
         float dt = GetFrameTime();
+        
+        // ⬇️ ФИКС: Ограничиваем dt, чтобы игрок не проваливался при лагах ⬇️
+        if (dt > 0.1f) dt = 0.1f; 
 
         World::Update(player.GetPosition());
         player.Update(dt);
@@ -95,7 +104,6 @@ int main() {
         EndDrawing();
     }
 
-    // ⬇️ КРИТИЧЕСКИЙ ФИКС: Очистка перед закрытием окна ⬇️
     World::Shutdown();
     TextureAtlas::Unload();
     CloseWindow();
